@@ -1,0 +1,11 @@
+on early-init
+    setprop qemu.hw.mainkeys 1
+
+on boot
+    chown root input /dev/uinput
+    chmod 0660 /dev/uinput
+
+service droidhatch-frame-agent /system/bin/droidhatch-frame-agent --capture-hwc --frame-port 5732 --input-port 5733 --audio-socket /ipc/droidhatch-audio.sock --audio-source-socket @droidhatch-audio-source --width 1280 --height 720 --fps 30 --accept-unknown-hwc-markers --input-debug --audio-debug
+    class core
+    user root
+    group root input

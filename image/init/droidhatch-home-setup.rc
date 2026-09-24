@@ -1,0 +1,9 @@
+service droidhatch-home-setup /system/bin/droidhatch-home-setup
+    class late_start
+    user root
+    group root system
+    disabled
+    oneshot
+
+on property:sys.boot_completed=1
+    start droidhatch-home-setup

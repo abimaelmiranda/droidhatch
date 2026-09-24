@@ -1,0 +1,18 @@
+FROM redroid/redroid:14.0.0_64only-latest
+
+# Apple Container injects hosts/resolv.conf before Android starts. The official
+# Redroid rootfs exposes /etc as an absolute symlink to /system/etc, which
+# makes that bootstrap write fail. ADD extracts the OCI whiteout layer before
+# any later files are copied, matching the validated DroidHatch base image.
+ADD bootstrap-layer.tar /
+
+# Validated DroidHatch runtime components.
+COPY prebuilt/gralloc.redroid.so /vendor/lib64/hw/gralloc.redroid.so
+COPY prebuilt/audio.primary.default.so /vendor/lib64/hw/audio.primary.default.so
+COPY prebuilt/droidhatch-frame-agent /system/bin/droidhatch-frame-agent
+COPY prebuilt/droidhatch-home.apk /system/app/DroidHatchHome/DroidHatchHome.apk
+
+# Deterministic input/audio and persistent single-app Home behavior.
+COPY init/droidhatch-input-audio.rc /system/etc/init/droidhatch-input-early.rc
+COPY init/droidhatch-home-setup.sh /system/bin/droidhatch-home-setup
+COPY init/droidhatch-home-setup.rc /system/etc/init/droidhatch-home-setup.rc
