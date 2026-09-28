@@ -1,5 +1,7 @@
 import Foundation
 
+typealias DroidHatchProgressHandler = @Sendable (String) -> Void
+
 final class DroidHatchContainerClient: @unchecked Sendable {
     let configuration: DroidHatchBackendConfiguration
     private let containerRunner: DroidHatchCommandRunner
@@ -37,23 +39,29 @@ final class DroidHatchContainerClient: @unchecked Sendable {
         adbRunner = DroidHatchCommandRunner(executable: adbExecutable)
     }
 
-    func ensureRunning() throws {
+    func ensureRunning(progress: @escaping DroidHatchProgressHandler = { _ in }) throws {
+        progress("Verificando o backend…")
         let state: String
         do {
             state = try inspectState()
         } catch {
+            progress("Baixando a imagem do GHCR e criando o backend…")
             try createBackend()
             state = try inspectState()
         }
 
         if state != DroidHatchContainerDefaults.runningState {
+            progress("Iniciando o container…")
             try runContainer(["start", configuration.containerName])
         }
-        try waitForAndroidBoot()
+        progress("Inicializando o Android…")
+        try waitForAndroidBoot(progress: progress)
+        progress("Backend pronto")
     }
 
-    func install(apkURL: URL) throws {
-        try ensureRunning()
+    func install(apkURL: URL, progress: @escaping DroidHatchProgressHandler = { _ in }) throws {
+        try ensureRunning(progress: progress)
+        progress("Instalando o APK…")
         try runADB([
             "-s", adbSerial,
             "install",
@@ -67,19 +75,27 @@ final class DroidHatchContainerClient: @unchecked Sendable {
         try AndroidApkManifestReader().readPackageName(from: apkURL)
     }
 
-    func installAndReturnPackageName(apkURL: URL) throws -> String {
+    func installAndReturnPackageName(
+        apkURL: URL,
+        progress: @escaping DroidHatchProgressHandler = { _ in }) throws -> String {
         let packageName = try packageName(from: apkURL)
-        try install(apkURL: apkURL)
+        try install(apkURL: apkURL, progress: progress)
         return packageName
     }
 
-    func uninstall(packageName: String) throws {
-        try ensureRunning()
+    func uninstall(
+        packageName: String,
+        progress: @escaping DroidHatchProgressHandler = { _ in }) throws {
+        try ensureRunning(progress: progress)
+        progress("Removendo o aplicativo…")
         try runADB(["-s", adbSerial, "shell", "pm", "uninstall", packageName])
     }
 
-    func open(packageName: String) throws {
-        try ensureRunning()
+    func open(
+        packageName: String,
+        progress: @escaping DroidHatchProgressHandler = { _ in }) throws {
+        try ensureRunning(progress: progress)
+        progress("Abrindo o aplicativo…")
         _ = try? runADB([
             "-s", adbSerial,
             "shell", "am", "broadcast",
@@ -99,7 +115,7 @@ final class DroidHatchContainerClient: @unchecked Sendable {
             .map(String.init)
             .first(where: { $0.contains("/") }) else {
             throw DroidHatchContainerError.commandFailed(
-                "Não foi possível encontrar a activity inicial de \\(packageName).")
+                "Não foi possível encontrar a activity inicial de \(packageName).")
         }
         try runADB([
             "-s", adbSerial,
@@ -155,8 +171,11 @@ final class DroidHatchContainerClient: @unchecked Sendable {
         return state.lowercased()
     }
 
-    private func waitForAndroidBoot() throws {
-        try DroidHatchAndroidReadiness.wait(serial: adbSerial, runADB: runADB)
+    private func waitForAndroidBoot(progress: @escaping DroidHatchProgressHandler) throws {
+        try DroidHatchAndroidReadiness.wait(
+            serial: adbSerial,
+            runADB: runADB,
+            progress: progress)
     }
 
     @discardableResult

@@ -9,8 +9,12 @@ final class DroidHatchAppInstaller: @unchecked Sendable {
         self.store = store
     }
 
-    func install(apkURL: URL) throws -> DroidHatchInstallationResult {
-        let packageName = try backend.installAndReturnPackageName(apkURL: apkURL)
+    func install(
+        apkURL: URL,
+        progress: @escaping DroidHatchProgressHandler = { _ in }) throws -> DroidHatchInstallationResult {
+        let packageName = try backend.installAndReturnPackageName(
+            apkURL: apkURL,
+            progress: progress)
         let existing = try store.findByPackageName(packageName)
         let alias: String
         if let existing {

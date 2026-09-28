@@ -38,10 +38,15 @@ struct LauncherView: View {
 
             Divider()
             HStack {
+                if model.isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                }
                 Text(model.status)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
                 Spacer()
                 Button("Remover", role: .destructive) { model.removeSelected() }
                     .disabled(model.selectedApp == nil || model.isBusy)

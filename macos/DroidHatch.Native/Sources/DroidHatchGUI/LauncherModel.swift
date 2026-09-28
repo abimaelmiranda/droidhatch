@@ -71,7 +71,11 @@ final class LauncherModel: ObservableObject {
 
     func install() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "apk")!]
+        guard let apkType = UTType(filenameExtension: "apk") else {
+            status = "Não foi possível reconhecer arquivos APK."
+            return
+        }
+        panel.allowedContentTypes = [apkType]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let backend else {
@@ -79,22 +83,23 @@ final class LauncherModel: ObservableObject {
             return
         }
 
-        isBusy = true
-        status = "Instalando APK…"
+        guard let operationID = beginOperation(status: "Instalando APK…") else { return }
         let installer = DroidHatchAppInstaller(backend: backend, store: store)
+        let progress = statusUpdater(for: operationID)
         Task.detached { [weak self, installer] in
             do {
-                let result = try installer.install(apkURL: url)
+                let result = try installer.install(apkURL: url, progress: progress)
                 await MainActor.run {
-                    guard let self else { return }
-                    self.isBusy = false
-                    self.status = "\(result.packageName) instalado como \(result.alias)"
+                    guard let self,
+                          self.activeOperationID == operationID else { return }
+                    self.finishOperation(
+                        operationID,
+                        status: "\(result.packageName) instalado como \(result.alias)")
                     self.reload()
                 }
             } catch {
                 await MainActor.run {
-                    self?.isBusy = false
-                    self?.status = error.localizedDescription
+                    self?.finishOperation(operationID, status: error.localizedDescription)
                 }
             }
         }
@@ -107,29 +112,27 @@ final class LauncherModel: ObservableObject {
             return
         }
 
+        guard let operationID = beginOperation(status: "Removendo \(selectedApp.alias)…") else { return }
         viewerController.close()
-        isBusy = true
-        status = "Removendo \(selectedApp.alias)…"
+        let progress = statusUpdater(for: operationID)
         Task.detached { [weak self, backend, selectedApp] in
             do {
-                try backend.uninstall(packageName: selectedApp.packageName)
+                try backend.uninstall(packageName: selectedApp.packageName, progress: progress)
                 await MainActor.run {
                     do {
-                        guard let self else { return }
+                        guard let self,
+                              self.activeOperationID == operationID else { return }
                         try self.store.remove(alias: selectedApp.alias)
-                        self.isBusy = false
-                        self.status = "Aplicativo removido"
+                        self.finishOperation(operationID, status: "Aplicativo removido")
                         self.selectedAlias = nil
                         self.reload()
                     } catch {
-                        self?.isBusy = false
-                        self?.status = error.localizedDescription
+                        self?.finishOperation(operationID, status: error.localizedDescription)
                     }
                 }
             } catch {
                 await MainActor.run {
-                    self?.isBusy = false
-                    self?.status = error.localizedDescription
+                    self?.finishOperation(operationID, status: error.localizedDescription)
                 }
             }
         }
@@ -142,26 +145,25 @@ final class LauncherModel: ObservableObject {
             return
         }
 
-        isBusy = true
-        status = "Abrindo \(selectedApp.alias)…"
+        guard let operationID = beginOperation(status: "Abrindo \(selectedApp.alias)…") else { return }
+        let progress = statusUpdater(for: operationID)
         Task.detached { [weak self, backend, selectedApp] in
             do {
-                try backend.open(packageName: selectedApp.packageName)
+                try backend.open(packageName: selectedApp.packageName, progress: progress)
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self,
+                          self.activeOperationID == operationID else { return }
                     self.viewerController.show(
                         configuration: DroidHatchViewerConfiguration(
                             host: backend.configuration.host,
                             framePort: UInt16(backend.configuration.framePort),
                             inputPort: UInt16(backend.configuration.inputPort),
                             audioSocketPath: backend.configuration.hostAudioSocket.path))
-                    self.isBusy = false
-                    self.status = "\(selectedApp.alias) aberto"
+                    self.finishOperation(operationID, status: "\(selectedApp.alias) aberto")
                 }
             } catch {
                 await MainActor.run {
-                    self?.isBusy = false
-                    self?.status = error.localizedDescription
+                    self?.finishOperation(operationID, status: error.localizedDescription)
                 }
             }
         }
@@ -173,13 +175,17 @@ final class LauncherModel: ObservableObject {
             return
         }
 
-        isBusy = true
-        status = "Encerrando sessão…"
+        guard let operationID = beginOperation(status: "Encerrando sessão…") else { return }
         Task.detached { [weak self, backend] in
-            try? backend.close()
-            await MainActor.run {
-                self?.isBusy = false
-                self?.status = "Sessão encerrada"
+            do {
+                try backend.close()
+                await MainActor.run {
+                    self?.finishOperation(operationID, status: "Sessão encerrada")
+                }
+            } catch {
+                await MainActor.run {
+                    self?.finishOperation(operationID, status: error.localizedDescription)
+                }
             }
         }
     }
@@ -194,17 +200,44 @@ final class LauncherModel: ObservableObject {
 
     private func prepareBackend() {
         guard let backend else { return }
+        guard let operationID = beginOperation(status: "Verificando o backend…") else { return }
+        let progress = statusUpdater(for: operationID)
         Task.detached { [weak self, backend] in
             do {
-                try backend.ensureRunning()
+                try backend.ensureRunning(progress: progress)
                 await MainActor.run {
-                    guard let self, !self.isBusy else { return }
-                    self.status = "Backend pronto"
+                    self?.finishOperation(operationID, status: "Backend pronto")
                 }
             } catch {
                 await MainActor.run {
-                    self?.status = error.localizedDescription
+                    self?.finishOperation(operationID, status: error.localizedDescription)
                 }
+            }
+        }
+    }
+
+    private func beginOperation(status: String) -> UUID? {
+        guard activeOperationID == nil else { return nil }
+        let operationID = UUID()
+        activeOperationID = operationID
+        isBusy = true
+        self.status = status
+        return operationID
+    }
+
+    private func finishOperation(_ operationID: UUID, status: String) {
+        guard activeOperationID == operationID else { return }
+        activeOperationID = nil
+        isBusy = false
+        self.status = status
+    }
+
+    private func statusUpdater(for operationID: UUID) -> DroidHatchProgressHandler {
+        { [weak self] message in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.activeOperationID == operationID else { return }
+                self.status = message
             }
         }
     }
