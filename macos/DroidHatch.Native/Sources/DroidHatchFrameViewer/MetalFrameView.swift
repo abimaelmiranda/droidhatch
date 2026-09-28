@@ -11,13 +11,15 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
 
     private struct Uniforms {
         var scale: SIMD2<Float>
-        var pixelFormat: UInt32
+        var isYv12: UInt32
         var padding: UInt32
     }
 
     private let surface: MetalFrameSurface
     private let commandQueue: MTLCommandQueue?
-    private let pipelineState: MTLRenderPipelineState?
+    private let linearPipeline: MTLRenderPipelineState?
+    private let nearestPipeline: MTLRenderPipelineState?
+    private var fsr1Processor: Fsr1FrameProcessor?
     private let vertexBuffer: MTLBuffer?
     private let uniformBuffer: MTLBuffer?
     private var texture: MTLTexture?
@@ -31,9 +33,10 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
         self.surface = surface
 
         guard let device = surface.device,
-              let commandQueue = device.makeCommandQueue() else {
+              let commandQueue = surface.commandQueue else {
             commandQueue = nil
-            pipelineState = nil
+            linearPipeline = nil
+            nearestPipeline = nil
             vertexBuffer = nil
             uniformBuffer = nil
             super.init(frame: .zero, device: nil)
@@ -41,7 +44,11 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
         }
 
         self.commandQueue = commandQueue
-        pipelineState = MetalRenderSupport.makePipeline(device: device)
+        linearPipeline = surface.linearPipeline
+        nearestPipeline = surface.nearestPipeline
+        if let fsr1Pipelines = surface.fsr1Pipelines {
+            fsr1Processor = Fsr1FrameProcessor(device: device, pipelines: fsr1Pipelines)
+        }
 
         let vertices = [
             Vertex(position: SIMD2(-1, -1), textureCoordinate: SIMD2(0, 1)),
@@ -64,7 +71,8 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
     required init(coder: NSCoder) {
         surface = MetalFrameSurface()
         commandQueue = nil
-        pipelineState = nil
+        linearPipeline = nil
+        nearestPipeline = nil
         vertexBuffer = nil
         uniformBuffer = nil
         super.init(coder: coder)
@@ -86,7 +94,6 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
         guard let drawable = view.currentDrawable,
               let renderPassDescriptor = view.currentRenderPassDescriptor,
               let commandQueue,
-              let pipelineState,
               let vertexBuffer,
               let uniformBuffer,
               let device = view.device,
@@ -199,21 +206,49 @@ final class MetalFrameView: MTKView, MTKViewDelegate {
         } else {
             scale = SIMD2(Float(frameAspect / drawableAspect), 1)
         }
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        var mode = surface.resolvedUpscalingMode
+        var outputTexture = texture
+        let fsr1Settings = surface.fsr1Settings()
+        if surface.upscalingMode() == .fsr1, let fsr1Processor,
+           let enhancedTexture = fsr1Processor.encode(
+                commandBuffer: commandBuffer,
+                yTexture: texture,
+                cbTexture: cbTexture,
+                crTexture: crTexture,
+                pixelFormat: packet.pixelFormat,
+                inputWidth: packet.width,
+                inputHeight: packet.height,
+                sequence: packet.sequence,
+                requestedScale: fsr1Settings.outputScale,
+                sharpness: fsr1Settings.sharpness) {
+            outputTexture = enhancedTexture
+            mode = .fsr1
+        } else if surface.upscalingMode() == .fsr1 {
+            surface.markFsr1UnavailableAtRuntime()
+            mode = .linear
+        }
+        let displaysYv12 = mode != .fsr1
+            && packet.pixelFormat == FrameProtocolConstants.yv12PixelFormat
         uniformBuffer.contents().storeBytes(
-            of: Uniforms(scale: scale, pixelFormat: packet.pixelFormat, padding: 0),
+            of: Uniforms(
+                scale: scale,
+                isYv12: displaysYv12 ? 1 : 0,
+                padding: 0),
             as: Uniforms.self)
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+        let displayPipeline = mode == .nearest ? nearestPipeline : linearPipeline
+        guard let displayPipeline,
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return
         }
 
-        encoder.setRenderPipelineState(pipelineState)
+        encoder.setRenderPipelineState(displayPipeline)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
         encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)
-        encoder.setFragmentTexture(texture, index: 0)
-        encoder.setFragmentTexture(cbTexture, index: 1)
-        encoder.setFragmentTexture(crTexture, index: 2)
+        encoder.setFragmentTexture(outputTexture, index: 0)
+        encoder.setFragmentTexture(mode == .fsr1 ? nil : cbTexture, index: 1)
+        encoder.setFragmentTexture(mode == .fsr1 ? nil : crTexture, index: 2)
         encoder.drawPrimitives(
             type: .triangleStrip,
             vertexStart: 0,

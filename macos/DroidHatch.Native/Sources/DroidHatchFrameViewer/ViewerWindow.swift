@@ -1,16 +1,5 @@
 import AppKit
 
-extension Notification.Name {
-    static let droidHatchPlayPauseShortcut = Notification.Name(
-        "DroidHatch.playPauseShortcut")
-    public static let droidHatchToggleDiagnostics = Notification.Name(
-        "DroidHatch.toggleDiagnostics")
-    static let droidHatchViewerDidShow = Notification.Name(
-        "DroidHatch.viewerDidShow")
-    static let droidHatchViewerDidClose = Notification.Name(
-        "DroidHatch.viewerDidClose")
-}
-
 final class ViewerNSWindow: NSWindow {
     private var suppressedKeyUps = Set<UInt16>()
 
@@ -22,7 +11,7 @@ final class ViewerNSWindow: NSWindow {
                     "DroidHatch window play/pause shortcut keyCode=%hu",
                     event.keyCode)
                 NotificationCenter.default.post(
-                    name: .droidHatchPlayPauseShortcut,
+                    name: DroidHatchViewerNotifications.playPauseShortcut,
                     object: nil)
             }
             suppressedKeyUps.insert(event.keyCode)

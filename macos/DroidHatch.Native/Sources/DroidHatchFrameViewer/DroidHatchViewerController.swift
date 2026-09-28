@@ -7,6 +7,7 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
 
     private var window: ViewerNSWindow?
     private var closeCallbackScheduled = false
+    private var pictureInPictureEnabled = false
     private let powerAssertion = ViewerPowerAssertion()
     private let cursorInactivityController = CursorInactivityController()
 
@@ -17,12 +18,13 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
     public func show(configuration: DroidHatchViewerConfiguration) {
         if let existingWindow = window {
             existingWindow.delegate = self
+            applyPictureInPictureState(to: existingWindow)
             existingWindow.makeKeyAndOrderFront(nil)
             existingWindow.makeKey()
             NSApp.activate(ignoringOtherApps: true)
             powerAssertion.acquire()
             cursorInactivityController.start()
-            NotificationCenter.default.post(name: .droidHatchViewerDidShow, object: nil)
+            NotificationCenter.default.post(name: DroidHatchViewerNotifications.didShow, object: nil)
             return
         }
 
@@ -44,13 +46,13 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
 
         window.title = "DroidHatch"
         window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.fullScreenPrimary]
         window.contentViewController = hostingController
         window.minSize = ViewerWindowMetrics.minimumContentSize
         window.maxSize = NSSize(width: 16_384, height: 16_384)
         window.setContentSize(ViewerWindowMetrics.initialContentSize)
         window.center()
         window.delegate = self
+        applyPictureInPictureState(to: window)
         window.makeKeyAndOrderFront(nil)
         window.makeKey()
         NSApp.activate(ignoringOtherApps: true)
@@ -58,6 +60,18 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
         self.window = window
         powerAssertion.acquire()
         cursorInactivityController.start()
+    }
+
+    public func setPictureInPictureEnabled(_ isEnabled: Bool) {
+        pictureInPictureEnabled = isEnabled
+        guard let window else { return }
+
+        if isEnabled && window.styleMask.contains(.fullScreen) {
+            window.toggleFullScreen(nil)
+            return
+        }
+
+        applyPictureInPictureState(to: window)
     }
 
     public func close() {
@@ -88,9 +102,29 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
         finishClose()
     }
 
+    public func windowDidExitFullScreen(_ notification: Notification) {
+        guard let exitedWindow = notification.object as? NSWindow,
+              exitedWindow === window else {
+            return
+        }
+
+        applyPictureInPictureState(to: exitedWindow)
+    }
+
     private func tearDown() {
         cursorInactivityController.stop()
         powerAssertion.release()
+    }
+
+    private func applyPictureInPictureState(to window: NSWindow) {
+        guard pictureInPictureEnabled else {
+            window.level = .normal
+            window.collectionBehavior = [.fullScreenPrimary]
+            return
+        }
+
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
     private func finishClose() {
@@ -99,7 +133,7 @@ public final class DroidHatchViewerController: NSObject, NSWindowDelegate {
         }
 
         closeCallbackScheduled = true
-        NotificationCenter.default.post(name: .droidHatchViewerDidClose, object: nil)
+        NotificationCenter.default.post(name: DroidHatchViewerNotifications.didClose, object: nil)
 
         DispatchQueue.main.async { [weak self] in
             guard let self, self.closeCallbackScheduled else {

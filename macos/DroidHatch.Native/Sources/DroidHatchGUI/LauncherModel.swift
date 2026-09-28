@@ -14,6 +14,8 @@ final class LauncherModel: ObservableObject {
     private var backend: DroidHatchContainerClient?
     private let viewerController = DroidHatchViewerController()
     private var terminationObserver: NSObjectProtocol?
+    private var pictureInPictureObserver: NSObjectProtocol?
+    private var activeOperationID: UUID?
 
     init() {
         do {
@@ -25,6 +27,18 @@ final class LauncherModel: ObservableObject {
         viewerController.onClose = { [weak self] in
             self?.handleViewerClosed()
         }
+        viewerController.setPictureInPictureEnabled(
+            UserDefaults.standard.bool(
+                forKey: ViewerPictureInPicturePreference.defaultsKey))
+        pictureInPictureObserver = NotificationCenter.default.addObserver(
+            forName: ViewerPictureInPicturePreference.didChange,
+            object: nil,
+            queue: .main) { [weak self] notification in
+                guard let isEnabled = notification.object as? Bool else { return }
+                Task { @MainActor in
+                    self?.viewerController.setPictureInPictureEnabled(isEnabled)
+                }
+            }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,

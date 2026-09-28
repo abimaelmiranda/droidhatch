@@ -16,6 +16,9 @@ final class ViewerModel: ObservableObject {
     @Published private(set) var audioDescription = "Audio is connecting..."
     @Published private(set) var audioDiagnostics = "Audio metrics are pending..."
     @Published private(set) var diagnosticsVisible = false
+    @Published var isScalingSettingsPresented = false
+    @Published private(set) var upscalingOutputScale = Fsr1RenderDefaults.defaultOutputScale
+    @Published private(set) var upscalingSharpness = Fsr1RenderDefaults.defaultSharpness
 
     private let options: ViewerOptions
     let metalSurface: MetalFrameSurface
@@ -30,13 +33,17 @@ final class ViewerModel: ObservableObject {
     private var videoFramesInMetricsWindow = 0
 
     private var rendererName: String {
-        usesMetal ? "metal" : "software"
+        guard options.prefersMetal else { return "software (Metal disabled)" }
+        return usesMetal ? metalSurface.rendererDescription : metalSurface.unavailableRendererDescription
     }
 
     init(options: ViewerOptions) {
         self.options = options
         let surface = MetalFrameSurface()
         self.metalSurface = surface
+        surface.setFsr1Settings(
+            outputScale: Fsr1RenderDefaults.defaultOutputScale,
+            sharpness: Fsr1RenderDefaults.defaultSharpness)
         self.usesMetal = options.prefersMetal && surface.isAvailable
         self.videoDiagnostics = "FPS=-- resolution=-- render=\(self.rendererName)"
     }
@@ -316,9 +323,18 @@ final class ViewerModel: ObservableObject {
             framesPerSecond,
             width,
             height,
-            rendererName)
+            diagnosticRendererDescription)
         videoMetricsWindowStart = currentTime
         videoFramesInMetricsWindow = 0
+    }
+
+    private var diagnosticRendererDescription: String {
+        guard metalSurface.resolvedUpscalingMode == .fsr1 else { return rendererName }
+        return String(
+            format: "%@ scale=%.2fx sharp=%.0f%%",
+            rendererName,
+            upscalingOutputScale,
+            upscalingSharpness * 100)
     }
 
     func stop() {
@@ -336,6 +352,32 @@ final class ViewerModel: ObservableObject {
 
     func toggleDiagnostics() {
         diagnosticsVisible.toggle()
+    }
+
+    func setUpscalingMode(_ mode: UpscalingMode) {
+        metalSurface.setUpscalingMode(mode)
+        videoDiagnostics = "FPS=-- resolution=-- render=\(rendererName)"
+    }
+
+    func setUpscalingOutputScale(_ value: Double) {
+        upscalingOutputScale = min(max(value, Fsr1RenderDefaults.minimumScale), Fsr1RenderDefaults.maximumScale)
+        metalSurface.setFsr1Settings(
+            outputScale: upscalingOutputScale,
+            sharpness: upscalingSharpness)
+    }
+
+    func setUpscalingSharpness(_ value: Double) {
+        upscalingSharpness = min(max(value, Fsr1RenderDefaults.minimumSharpness), Fsr1RenderDefaults.maximumSharpness)
+        metalSurface.setFsr1Settings(
+            outputScale: upscalingOutputScale,
+            sharpness: upscalingSharpness)
+    }
+
+    var upscalingOutputDescription: String? {
+        guard let frameSize else { return nil }
+        let width = Int((frameSize.width * upscalingOutputScale).rounded())
+        let height = Int((frameSize.height * upscalingOutputScale).rounded())
+        return "\(width) × \(height) pixels (source: \(Int(frameSize.width)) × \(Int(frameSize.height)))"
     }
 
     func sendKey(usage: UInt16, action: InputKeyAction) {

@@ -27,7 +27,11 @@ let package = Package(
         .target(
             name: "DroidHatchViewer",
             dependencies: ["DroidHatchFrameTransport"],
-            path: "Sources/DroidHatchFrameViewer"),
+            path: "Sources/DroidHatchFrameViewer",
+            resources: [.copy("Resources/Shaders")]),
+        .testTarget(
+            name: "DroidHatchViewerTests",
+            dependencies: ["DroidHatchViewer"]),
         .executableTarget(
             name: "DroidHatchGUI",
             dependencies: ["DroidHatchViewer"],

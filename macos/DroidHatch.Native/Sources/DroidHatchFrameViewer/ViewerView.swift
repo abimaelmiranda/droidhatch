@@ -78,22 +78,37 @@ struct ViewerWindow: View {
         }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: .droidHatchPlayPauseShortcut)) { _ in
+                for: DroidHatchViewerNotifications.playPauseShortcut)) { _ in
                     model.sendSystemAction(.playPause)
                 }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: .droidHatchToggleDiagnostics)) { _ in
+                for: DroidHatchViewerNotifications.toggleDiagnostics)) { _ in
                     model.toggleDiagnostics()
                 }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: .droidHatchViewerDidShow)) { _ in
+                for: DroidHatchViewerNotifications.setUpscalingMode)) { notification in
+                    guard let rawMode = notification.object as? String,
+                          let mode = UpscalingMode(rawValue: rawMode) else { return }
+                    model.setUpscalingMode(mode)
+                }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: DroidHatchViewerNotifications.showUpscalingSettings)) { _ in
+                    model.isScalingSettingsPresented = true
+                }
+        .sheet(isPresented: $model.isScalingSettingsPresented) {
+            VideoUpscalingSettingsView(model: model)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: DroidHatchViewerNotifications.didShow)) { _ in
                     model.start()
                 }
         .onReceive(
             NotificationCenter.default.publisher(
-                for: .droidHatchViewerDidClose)) { _ in
+                for: DroidHatchViewerNotifications.didClose)) { _ in
                     model.stop()
                 }
         .onDisappear {
